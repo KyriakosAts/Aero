@@ -1,0 +1,73 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-0: #06090f;
+  --bg-1: #0b1320;
+  --bg-2: #111b2b;
+  --ink-0: #f8fafc;
+  --ink-1: #cbd5e1;
+  --accent: #22c55e;
+  --accent-2: #06b6d4;
+}
+
+body {
+  @apply min-h-screen text-slate-100;
+  font-family: 'Manrope', sans-serif;
+  background:
+    radial-gradient(circle at 15% 15%, rgba(6, 182, 212, 0.16), transparent 34%),
+    radial-gradient(circle at 85% 0%, rgba(34, 197, 94, 0.14), transparent 40%),
+    linear-gradient(145deg, var(--bg-0), var(--bg-1) 48%, var(--bg-2));
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: 'Space Grotesk', sans-serif;
+  letter-spacing: -0.015em;
+}
+
+.card {
+  @apply border rounded-xl shadow-lg;
+  @apply border-slate-700/70 bg-slate-900/45;
+  backdrop-filter: blur(7px);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(148, 163, 184, 0.45);
+  box-shadow: 0 14px 30px rgba(2, 8, 23, 0.28);
+}
+
+.btn-primary {
+  @apply px-4 py-2 rounded-lg font-semibold text-slate-950;
+  @apply bg-emerald-400 hover:bg-emerald-300;
+  @apply transition-colors;
+}
+
+.btn-secondary {
+  @apply px-4 py-2 rounded-lg font-semibold text-slate-100;
+  @apply bg-slate-700 hover:bg-slate-600 transition-colors;
+}
+
+.input-field {
+  @apply w-full px-4 py-2 rounded-lg border;
+  @apply border-slate-600 bg-slate-800/80 text-slate-100 placeholder-slate-400;
+  @apply focus:outline-none focus:ring-2 focus:ring-cyan-500/60;
+}
+
+.parameter-input {
+  @apply w-full px-3 py-2 rounded border text-sm;
+  @apply border-slate-600 bg-slate-800/80 text-slate-100;
+  @apply focus:outline-none focus:ring-2 focus:ring-cyan-500/60;
+}
+
+.status-pill {
+  @apply inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold;
+  @apply border-slate-600 bg-slate-800/80 text-slate-300;
+}

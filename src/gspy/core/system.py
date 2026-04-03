@@ -71,10 +71,9 @@ def get_comp(component_name):
 
 def reinit_states_and_errors():
     global states, errors
-    for state in states:
-        state = 1
-    for error in errors:
-        state = 0
+    # Reset arrays in-place so all callers see updated initial values.
+    states[:] = 1.0
+    errors[:] = 0.0
 
 def reinit_system():
     for shaft in shaft_list:
