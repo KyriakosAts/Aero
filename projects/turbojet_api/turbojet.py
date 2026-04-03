@@ -15,6 +15,7 @@
 #   Oscar Kogenhop
 
 from gspy.api.base_model import BaseGasTurbineModel
+import gspy.core.system as fsys
 
 class Turbojet(BaseGasTurbineModel):
     """Input schema for turbojet engine simulation."""
@@ -23,7 +24,41 @@ class Turbojet(BaseGasTurbineModel):
         super().__init__("turbojet")
 
     def run(self):
-        super().run()
+        if self.run_mode == "OD":
+            # OD requires DP initialization first in this model family.
+            ambient = fsys.components.get("Ambient")
+            od_ambient = None
+            if ambient is not None:
+                od_ambient = {
+                    "Altitude": getattr(ambient, "Altitude", None),
+                    "Macha": getattr(ambient, "Macha", None),
+                    "dTs": getattr(ambient, "dTs", None),
+                    "Psa": getattr(ambient, "Psa", None),
+                    "Tsa": getattr(ambient, "Tsa", None),
+                }
+
+            self.run_mode = "DP"
+            super().run()
+
+            fuel_control = fsys.components.get("Fuel Controller")
+            if fuel_control is not None and hasattr(fuel_control, "Get_OD_inputpoints"):
+                fsys.inputpoints = fuel_control.Get_OD_inputpoints()
+
+            if ambient is not None and od_ambient is not None:
+                ambient.SetConditions(
+                    "OD",
+                    od_ambient["Altitude"],
+                    od_ambient["Macha"],
+                    od_ambient["dTs"],
+                    od_ambient["Psa"],
+                    od_ambient["Tsa"],
+                )
+
+            self.run_mode = "OD"
+            super().run()
+        else:
+            super().run()
+
         self.save_output_csv()
         print("end of running turbojet simulation")
 

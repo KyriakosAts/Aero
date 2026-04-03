@@ -91,7 +91,9 @@ export function QuickStart({ selectedEngine, onEngineChange }: QuickStartProps) 
         })
       )
 
-      const result = await API.runEngine(selectedEngine, 'DP', sanitizedParameters)
+      const effectiveRunMode: 'DP' | 'OD' = selectedEngine.startsWith('turbojet') ? 'OD' : 'DP'
+
+      const result = await API.runEngine(selectedEngine, effectiveRunMode, sanitizedParameters)
       setResults(result)
 
       if (result.status === 'success') {
@@ -217,6 +219,13 @@ export function QuickStart({ selectedEngine, onEngineChange }: QuickStartProps) 
             ))}
           </div>
         </Card>
+      )}
+
+      {selectedEngine !== 'custom_builder' && selectedEngine.startsWith('turbojet') && (
+        <Card
+          title="Analysis Mode"
+          description="OD is used automatically for turbojet analysis. DP warm-up is handled internally by the model."
+        />
       )}
 
       {/* Run Button */}

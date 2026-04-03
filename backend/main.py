@@ -7,8 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any
-import copy
-import csv
+import math
 import os
 from pathlib import Path
 import sys
@@ -138,29 +137,133 @@ def _to_float(value: Any) -> Optional[float]:
         return None
 
 
-def _sample_csv_path_for_engine(engine_name: str) -> Path:
-    # Today we only have validated sample output for turbojet.
-    # For non-turbojet engines we intentionally use the turbojet sample
-    # as a UI fallback so charts always render while API integration evolves.
-    if engine_name.startswith("turbojet"):
-        return workspace_root / "tests" / "output" / "turbojet" / "turbojet.csv"
-    return workspace_root / "tests" / "output" / "turbojet" / "turbojet.csv"
+def _kn_to_n(value: Any) -> Optional[float]:
+    thrust_kn = _to_float(value)
+    if thrust_kn is None:
+        return None
+    return thrust_kn * 1000.0
 
 
-def _load_sample_dataset(engine_name: str) -> Dict[str, Any]:
-    csv_path = _sample_csv_path_for_engine(engine_name)
-    if not csv_path.exists():
-        raise FileNotFoundError(f"Sample results file not found: {csv_path}")
+def _json_safe_value(value: Any) -> Any:
+    if value is None:
+        return None
 
-    with csv_path.open("r", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        rows = list(reader)
+    if hasattr(value, "item"):
+        try:
+            return _json_safe_value(value.item())
+        except Exception:
+            pass
 
-    if not rows:
-        raise ValueError("Sample dataset is empty")
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
 
-    dp_row = next((row for row in rows if row.get("Mode") == "DP"), rows[0])
-    od_rows = [row for row in rows if row.get("Mode") == "OD"]
+    return value
+
+
+def _normalize_table_rows(raw_rows: Any) -> List[Dict[str, Any]]:
+    if raw_rows is None:
+        return []
+
+    if hasattr(raw_rows, "to_dict"):
+        try:
+            raw_rows = raw_rows.to_dict(orient="records")
+        except Exception:
+            pass
+
+    if isinstance(raw_rows, dict):
+        for key in ("table_rows", "rows", "results", "records"):
+            candidate = raw_rows.get(key)
+            if isinstance(candidate, list):
+                raw_rows = candidate
+                break
+
+    if not isinstance(raw_rows, list):
+        return []
+
+    normalized_rows: List[Dict[str, Any]] = []
+    for row in raw_rows:
+        if not isinstance(row, dict):
+            continue
+        normalized_rows.append(
+            {str(key): _json_safe_value(value) for key, value in row.items()}
+        )
+
+    return normalized_rows
+
+
+def _build_dataset_from_table_rows(
+    table_rows: List[Dict[str, Any]],
+    source: str,
+    preferred_mode: str = "DP",
+) -> Dict[str, Any]:
+    if not table_rows:
+        raise ValueError("Simulation produced no tabular output rows")
+
+    dp_row = next((row for row in table_rows if str(row.get("Mode", "")).upper() == "DP"), table_rows[0])
+    od_rows = [row for row in table_rows if str(row.get("Mode", "")).upper() == "OD"]
+    normalized_mode = preferred_mode.upper()
+
+    if normalized_mode == "OD" and od_rows:
+        summary_row = od_rows[-1]
+        series_rows = od_rows
+
+        def _avg(values: List[float]) -> Optional[float]:
+            return (sum(values) / len(values)) if values else None
+
+        thrust_values = [_kn_to_n(row.get("FN")) for row in od_rows]
+        thrust_values = [value for value in thrust_values if value is not None]
+
+        fuel_values = [
+            _to_float(row.get("WF")) or _to_float(row.get("Wf_combustor1"))
+            for row in od_rows
+        ]
+        fuel_values = [value for value in fuel_values if value is not None]
+
+        compressor_pr_values = [_to_float(row.get("PR_compressor1")) for row in od_rows]
+        compressor_pr_values = [value for value in compressor_pr_values if value is not None]
+
+        t4_values = [_to_float(row.get("T4")) for row in od_rows]
+        t4_values = [value for value in t4_values if value is not None]
+
+        n1_values = [_to_float(row.get("N1%")) for row in od_rows]
+        n1_values = [value for value in n1_values if value is not None]
+
+        tsfc_values: List[float] = []
+        for row in od_rows:
+            fuel = _to_float(row.get("WF")) or _to_float(row.get("Wf_combustor1"))
+            thrust = _kn_to_n(row.get("FN"))
+            if fuel is None or thrust in (None, 0.0):
+                continue
+            tsfc_values.append(fuel / thrust)
+
+        summary = {
+            "net_thrust_N": _avg(thrust_values),
+            "fuel_flow_kg_s": _avg(fuel_values),
+            "tsfc_kg_per_Ns": _avg(tsfc_values),
+            "compressor_pr": _avg(compressor_pr_values),
+            "turbine_inlet_temp_K": _avg(t4_values),
+            "n1_percent": _avg(n1_values),
+        }
+    else:
+        summary_row = dp_row
+        series_rows = od_rows if od_rows else table_rows
+
+        fuel_flow = _to_float(summary_row.get("WF")) or _to_float(summary_row.get("Wf_combustor1"))
+        net_thrust = _kn_to_n(summary_row.get("FN"))
+        tsfc = None
+        if fuel_flow is not None and net_thrust not in (None, 0.0):
+            tsfc = fuel_flow / net_thrust
+
+        summary = {
+            "net_thrust_N": net_thrust,
+            "fuel_flow_kg_s": fuel_flow,
+            "tsfc_kg_per_Ns": tsfc,
+            "compressor_pr": _to_float(summary_row.get("PR_compressor1")),
+            "turbine_inlet_temp_K": _to_float(summary_row.get("T4")),
+            "n1_percent": _to_float(summary_row.get("N1%")),
+        }
 
     station_map = [
         ("0", "T0", "P0"),
@@ -175,8 +278,8 @@ def _load_sample_dataset(engine_name: str) -> Dict[str, Any]:
 
     station_profile = []
     for station, t_key, p_key in station_map:
-        temp = _to_float(dp_row.get(t_key))
-        press = _to_float(dp_row.get(p_key))
+        temp = _to_float(summary_row.get(t_key))
+        press = _to_float(summary_row.get(p_key))
         if temp is None and press is None:
             continue
         station_profile.append(
@@ -187,15 +290,14 @@ def _load_sample_dataset(engine_name: str) -> Dict[str, Any]:
             }
         )
 
-    series_rows = od_rows if od_rows else rows
     performance_curve = []
     for row in series_rows:
         performance_curve.append(
             {
                 "point": _to_float(row.get("Point/Time")),
                 "fuel_flow": _to_float(row.get("Wf_combustor1")) or _to_float(row.get("WF")),
-                "net_thrust": _to_float(row.get("FN")),
-                "gross_thrust": _to_float(row.get("FG")),
+                "net_thrust": _kn_to_n(row.get("FN")),
+                "gross_thrust": _kn_to_n(row.get("FG")),
                 "n1_percent": _to_float(row.get("N1%")),
                 "mach_exit": _to_float(row.get("Mach8")),
                 "turbine_inlet_temp": _to_float(row.get("T4")),
@@ -203,185 +305,191 @@ def _load_sample_dataset(engine_name: str) -> Dict[str, Any]:
             }
         )
 
-    fuel_flow = _to_float(dp_row.get("WF")) or _to_float(dp_row.get("Wf_combustor1"))
-    net_thrust = _to_float(dp_row.get("FN"))
-    tsfc = None
-    if fuel_flow is not None and net_thrust not in (None, 0.0):
-        tsfc = fuel_flow / net_thrust
-
-    table_columns = list(rows[0].keys())
-    table_rows = rows
-
     return {
-        "source": "sample_validation_csv",
-        "summary": {
-            "net_thrust_N": net_thrust,
-            "fuel_flow_kg_s": fuel_flow,
-            "tsfc_kg_per_Ns": tsfc,
-            "compressor_pr": _to_float(dp_row.get("PR_compressor1")),
-            "turbine_inlet_temp_K": _to_float(dp_row.get("T4")),
-            "n1_percent": _to_float(dp_row.get("N1%")),
-        },
+        "source": source,
+        "summary": summary,
         "station_profile": station_profile,
         "performance_curve": performance_curve,
-        "table_columns": table_columns,
+        "table_columns": list(table_rows[0].keys()),
         "table_rows": table_rows,
         "row_count": len(table_rows),
     }
 
 
-def _variation_from_preset_parameters(parameters: Dict[str, Any]) -> Dict[str, float]:
-    altitude = _to_float(parameters.get("altitude")) or 0.0
-    mach = _to_float(parameters.get("mach")) or 0.0
-    throttle_raw = _to_float(parameters.get("throttle"))
-    throttle = 0.5 if throttle_raw is None else max(0.0, min(1.0, throttle_raw))
-    temperature_offset = _to_float(parameters.get("temperature_offset")) or 0.0
+def _prepare_live_simulation_state() -> None:
+    import numpy as np
+    from gspy.core import system as core_system
 
-    speed_values = [
-        value
-        for value in [
-            _to_float(parameters.get("fan_speed")),
-            _to_float(parameters.get("core_speed")),
-        ]
-        if value is not None
-    ]
+    # Clear accumulated mutable globals so each request starts clean.
+    core_system.OutputTable = None
+    core_system.output_dict = {}
+    core_system.components = {}
+    core_system.gaspath_conditions = {}
+    core_system.system_model = []
+    core_system.shaft_list = []
+    core_system.inputpoints = np.array([], dtype=float)
+    core_system.states = np.array([], dtype=float)
+    core_system.errors = np.array([], dtype=float)
+    core_system.Ambient = None
 
-    speed_factor = 1.0
-    if speed_values:
-        speed_factor = max(0.75, min(1.3, (sum(speed_values) / len(speed_values)) / 85.0))
 
-    thrust_scale = (
-        (0.6 + 0.8 * throttle)
-        * max(0.55, 1.0 - altitude / 26000.0)
-        * max(0.75, 1.0 - 0.16 * mach)
-        * max(0.7, 1.0 - 0.003 * max(temperature_offset, 0.0))
-        * speed_factor
+def _configure_od_input_points() -> None:
+    from gspy.core import system as core_system
+
+    existing_points = getattr(core_system, "inputpoints", None)
+    if existing_points is not None:
+        try:
+            if len(existing_points) > 0:
+                return
+        except TypeError:
+            pass
+
+    for component in getattr(core_system, "system_model", []):
+        getter = getattr(component, "Get_OD_inputpoints", None)
+        if not callable(getter):
+            continue
+        points = getter()
+        if points is None:
+            continue
+        try:
+            if len(points) > 0:
+                core_system.inputpoints = points
+                return
+        except TypeError:
+            continue
+
+    raise RuntimeError(
+        "OD mode requested, but no off-design input points are defined by this model"
     )
-    fuel_scale = (
-        (0.75 + 0.7 * throttle)
-        * (1.0 + 0.06 * mach)
-        * (1.0 + 0.002 * max(temperature_offset, 0.0))
-        * max(0.8, min(1.25, speed_factor))
-    )
-    compressor_pr_scale = max(0.75, min(1.25, speed_factor * (0.95 + 0.08 * throttle)))
-    temp_delta = temperature_offset * 0.8 + (throttle - 0.5) * 160.0
-    n1_delta = (throttle - 0.5) * 20.0 + (speed_factor - 1.0) * 15.0
-
-    return {
-        "thrust_scale": thrust_scale,
-        "fuel_scale": fuel_scale,
-        "compressor_pr_scale": compressor_pr_scale,
-        "temp_delta": temp_delta,
-        "n1_delta": n1_delta,
-    }
 
 
-def _variation_from_custom_components(components: List[CustomEngineComponent]) -> Dict[str, float]:
-    numeric_parameters: Dict[str, List[float]] = {}
-    for component in components:
-        for key, value in component.parameters.items():
-            number = _to_float(value)
-            if number is None:
-                continue
-            numeric_parameters.setdefault(key, []).append(number)
+def _apply_live_preset_parameters(
+    engine_name: str,
+    run_mode: str,
+    parameters: Dict[str, Any],
+) -> Dict[str, List[str]]:
+    from gspy.core import system as core_system
 
-    def avg(key: str, default: float) -> float:
-        values = numeric_parameters.get(key)
-        if not values:
-            return default
-        return sum(values) / len(values)
+    components = getattr(core_system, "components", {}) or {}
+    applied: List[str] = []
 
-    pressure_ratio = avg("pressure_ratio", 6.9)
-    efficiency = avg("efficiency", 0.88)
-    altitude = avg("altitude", 0.0)
-    humidity = avg("humidity", 0.0)
-    fuel_flow = avg("fuel_flow", 0.38)
-    outlet_temperature = avg("outlet_temperature", 1235.0)
-    speed = avg("speed", 100.0)
+    ambient = components.get("Ambient")
+    altitude = _to_float(parameters.get("altitude"))
+    mach = _to_float(parameters.get("mach"))
+    temperature_offset = _to_float(parameters.get("temperature_offset"))
 
-    thrust_scale = max(
-        0.55,
-        min(1.8, (pressure_ratio / 6.9) * (0.7 + efficiency / 1.3) * max(0.7, 1.0 - altitude / 30000.0)),
-    )
-    fuel_scale = max(0.45, min(1.8, (fuel_flow / 0.38) * (1.0 + humidity * 0.1)))
-    compressor_pr_scale = max(0.6, min(1.7, pressure_ratio / 6.9))
-    temp_delta = (outlet_temperature - 1235.0) * 0.65
-    n1_delta = (speed - 100.0) * 0.2
+    if ambient:
+        mode_key = "DP" if run_mode.upper() == "DP" else "OD"
 
-    return {
-        "thrust_scale": thrust_scale,
-        "fuel_scale": fuel_scale,
-        "compressor_pr_scale": compressor_pr_scale,
-        "temp_delta": temp_delta,
-        "n1_delta": n1_delta,
-    }
+        def _mode_value(dp_attr: str, od_attr: str, fallback: float) -> float:
+            if mode_key == "DP":
+                return _to_float(getattr(ambient, dp_attr, None)) or fallback
+            return (
+                _to_float(getattr(ambient, od_attr, None))
+                or _to_float(getattr(ambient, dp_attr, None))
+                or fallback
+            )
+
+        altitude_value = altitude if altitude is not None else _mode_value("Altitude_des", "Altitude", 0.0)
+        mach_value = mach if mach is not None else _mode_value("Macha_des", "Macha", 0.0)
+        dts_value = temperature_offset if temperature_offset is not None else _mode_value("dTs_des", "dTs", 0.0)
+        psa_value = getattr(ambient, "Psa_des", None) if mode_key == "DP" else getattr(ambient, "Psa", None)
+        tsa_value = getattr(ambient, "Tsa_des", None) if mode_key == "DP" else getattr(ambient, "Tsa", None)
+
+        if mode_key == "OD":
+            # Keep OD ambient inputs consistent across the mandatory DP warm-up
+            # and the subsequent OD sweep rows.
+            ambient.SetConditions("DP", altitude_value, mach_value, dts_value, psa_value, tsa_value)
+            ambient.SetConditions("OD", altitude_value, mach_value, dts_value, psa_value, tsa_value)
+        else:
+            ambient.SetConditions("DP", altitude_value, mach_value, dts_value, psa_value, tsa_value)
+        if altitude is not None:
+            applied.append("altitude")
+        if mach is not None:
+            applied.append("mach")
+        if temperature_offset is not None:
+            applied.append("temperature_offset")
+
+    ignored = [key for key in parameters.keys() if key not in applied]
+    return {"applied": sorted(set(applied)), "ignored": sorted(set(ignored))}
 
 
-def _apply_dataset_variation(
-    dataset: Dict[str, Any],
-    thrust_scale: float = 1.0,
-    fuel_scale: float = 1.0,
-    compressor_pr_scale: float = 1.0,
-    temp_delta: float = 0.0,
-    n1_delta: float = 0.0,
+def _extract_live_simulation_rows(run_result: Any) -> List[Dict[str, Any]]:
+    # Preferred path for future API evolution.
+    get_results = getattr(gspy_api, "get_results", None)
+    if callable(get_results):
+        rows = _normalize_table_rows(get_results())
+        if rows:
+            return rows
+
+    rows = _normalize_table_rows(run_result)
+    if rows:
+        return rows
+
+    # Current GSPy writes results into core.system.OutputTable.
+    try:
+        from gspy.core import system as core_system
+
+        rows = _normalize_table_rows(getattr(core_system, "OutputTable", None))
+    except Exception as exc:
+        raise RuntimeError(f"Unable to read live simulation table: {exc}") from exc
+
+    if not rows:
+        raise RuntimeError("Live simulation completed but produced no output rows")
+
+    return rows
+
+
+def _run_live_preset_simulation(
+    engine_name: str,
+    run_mode: str,
+    parameters: Dict[str, Any],
 ) -> Dict[str, Any]:
-    data = copy.deepcopy(dataset)
+    if gspy_api is None:
+        raise RuntimeError("GSPy API is unavailable")
 
-    summary = data.get("summary", {})
-    if summary.get("net_thrust_N") is not None:
-        summary["net_thrust_N"] = summary["net_thrust_N"] * thrust_scale
-    if summary.get("fuel_flow_kg_s") is not None:
-        summary["fuel_flow_kg_s"] = summary["fuel_flow_kg_s"] * fuel_scale
-    if summary.get("compressor_pr") is not None:
-        summary["compressor_pr"] = summary["compressor_pr"] * compressor_pr_scale
-    if summary.get("turbine_inlet_temp_K") is not None:
-        summary["turbine_inlet_temp_K"] = summary["turbine_inlet_temp_K"] + temp_delta
-    if summary.get("n1_percent") is not None:
-        summary["n1_percent"] = max(0.0, summary["n1_percent"] + n1_delta)
+    model_module = AVAILABLE_ENGINES[engine_name].get("api_model")
+    if not model_module:
+        raise RuntimeError(f"Live API model not configured for '{engine_name}'")
 
-    thrust = summary.get("net_thrust_N")
-    fuel = summary.get("fuel_flow_kg_s")
-    if thrust not in (None, 0.0) and fuel is not None:
-        summary["tsfc_kg_per_Ns"] = fuel / thrust
+    initialized = False
+    try:
+        _prepare_live_simulation_state()
+        gspy_api.initProg(model=model_module, mode=run_mode)
+        initialized = True
 
-    for point in data.get("performance_curve", []):
-        if point.get("net_thrust") is not None:
-            point["net_thrust"] = point["net_thrust"] * thrust_scale
-        if point.get("gross_thrust") is not None:
-            point["gross_thrust"] = point["gross_thrust"] * thrust_scale
-        if point.get("fuel_flow") is not None:
-            point["fuel_flow"] = point["fuel_flow"] * fuel_scale
-        if point.get("compressor_pr") is not None:
-            point["compressor_pr"] = point["compressor_pr"] * compressor_pr_scale
-        if point.get("turbine_inlet_temp") is not None:
-            point["turbine_inlet_temp"] = point["turbine_inlet_temp"] + temp_delta
-        if point.get("n1_percent") is not None:
-            point["n1_percent"] = max(0.0, point["n1_percent"] + n1_delta)
+        parameter_result = _apply_live_preset_parameters(
+            engine_name=engine_name,
+            run_mode=run_mode,
+            parameters=parameters,
+        )
 
-    for station in data.get("station_profile", []):
-        if station.get("temperature_K") is not None:
-            station["temperature_K"] = station["temperature_K"] + temp_delta * 0.7
+        if run_mode.upper() == "OD":
+            _configure_od_input_points()
 
-    row_adjustments = {
-        "FN": (thrust_scale, 0.0),
-        "FG": (thrust_scale, 0.0),
-        "WF": (fuel_scale, 0.0),
-        "Wf_combustor1": (fuel_scale, 0.0),
-        "PR_compressor1": (compressor_pr_scale, 0.0),
-        "T4": (1.0, temp_delta),
-        "N1%": (1.0, n1_delta),
-    }
+        run_result = gspy_api.run()
+        table_rows = _extract_live_simulation_rows(run_result)
+        response_payload = _build_dataset_from_table_rows(
+            table_rows=table_rows,
+            source="live_simulation",
+            preferred_mode=run_mode,
+        )
+        response_payload["simulation_mode"] = run_mode
+        response_payload["applied_parameters"] = parameter_result["applied"]
 
-    for row in data.get("table_rows", []):
-        for key, (multiplier, delta) in row_adjustments.items():
-            original = row.get(key)
-            numeric = _to_float(original)
-            if numeric is None:
-                continue
-            updated = numeric * multiplier + delta
-            row[key] = f"{updated:.6f}"
+        if parameter_result["ignored"]:
+            response_payload["parameter_notice"] = (
+                "Some parameters are not yet wired for this engine and were ignored: "
+                + ", ".join(parameter_result["ignored"])
+            )
 
-    return data
+        return response_payload
+    finally:
+        if initialized:
+            try:
+                gspy_api.terminate()
+            except Exception:
+                pass
 
 # ============================================================================
 # API Endpoints
@@ -427,14 +535,6 @@ async def get_engine_schema(engine_name: str):
                     default=0,
                     min=0,
                     max=0.95,
-                ),
-                EngineParameter(
-                    name="throttle",
-                    description="Throttle setting (0-1)",
-                    type="number",
-                    default=0.5,
-                    min=0,
-                    max=1,
                 ),
                 EngineParameter(
                     name="temperature_offset",
@@ -506,54 +606,31 @@ async def run_preset_engine(engine_name: str, request: RunSimulationRequest):
     if engine_name not in AVAILABLE_ENGINES:
         raise HTTPException(status_code=404, detail=f"Engine '{engine_name}' not found")
 
-    engine_info = AVAILABLE_ENGINES[engine_name]
-    
-    if gspy_api is None:
-        try:
-            fallback = _load_sample_dataset(engine_name)
-            fallback = _apply_dataset_variation(
-                fallback,
-                **_variation_from_preset_parameters(request.parameters),
-            )
-        except Exception as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"GSPy API unavailable and sample fallback failed: {exc}",
-            )
+    if request.engine_name and request.engine_name != engine_name:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Engine mismatch: path engine is '{engine_name}' "
+                f"but payload engine is '{request.engine_name}'"
+            ),
+        )
 
-        return SimulationResults(
+    if gspy_api is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Live simulation backend is unavailable. "
+                "Install missing simulation dependencies and restart the API."
+            ),
+        )
+    
+    try:
+        results_data = _run_live_preset_simulation(
             engine_name=engine_name,
             run_mode=request.run_mode,
-            status="success",
-            data={
-                **fallback,
-                "warning": "Live simulation unavailable; returning validated sample output.",
-            },
+            parameters=request.parameters,
         )
-    
-    initialized = False
-    try:
-        model_module = engine_info.get("api_model")
-        if not model_module:
-            raise RuntimeError(f"Live API model not configured for '{engine_name}'")
 
-        # Initialize the model using gspy_api
-        gspy_api.initProg(model=model_module, mode=request.run_mode)
-        initialized = True
-        
-        # Run the simulation
-        gspy_api.run()
-        
-        # Until direct extraction from gspy_api is standardized for this UI,
-        # return validated chart-ready output from our sample dataset.
-        results_data = _load_sample_dataset(engine_name)
-        results_data = _apply_dataset_variation(
-            results_data,
-            **_variation_from_preset_parameters(request.parameters),
-        )
-        results_data["simulation_mode"] = request.run_mode
-        results_data["source"] = "sample_validation_csv"
-        
         return SimulationResults(
             engine_name=engine_name,
             run_mode=request.run_mode,
@@ -562,34 +639,10 @@ async def run_preset_engine(engine_name: str, request: RunSimulationRequest):
         )
     
     except Exception as e:
-        try:
-            fallback = _load_sample_dataset(engine_name)
-            fallback = _apply_dataset_variation(
-                fallback,
-                **_variation_from_preset_parameters(request.parameters),
-            )
-            return SimulationResults(
-                engine_name=engine_name,
-                run_mode=request.run_mode,
-                status="success",
-                data={
-                    **fallback,
-                    "warning": f"Live simulation failed ({e}); returning validated sample output.",
-                },
-            )
-        except Exception:
-            return SimulationResults(
-                engine_name=engine_name,
-                run_mode=request.run_mode,
-                status="error",
-                error=str(e),
-            )
-    finally:
-        if initialized:
-            try:
-                gspy_api.terminate()
-            except Exception:
-                pass
+        message = str(e)
+        if "not configured" in message:
+            raise HTTPException(status_code=501, detail=message)
+        raise HTTPException(status_code=500, detail=f"Live simulation failed: {message}")
 
 @app.post("/api/custom-engines/run", response_model=SimulationResults)
 async def run_custom_engine(request: RunCustomEngineRequest):
@@ -597,37 +650,13 @@ async def run_custom_engine(request: RunCustomEngineRequest):
     Run a custom-configured engine.
     User provides their own component configuration.
     """
-    try:
-        # Custom runtime integration with gspy_api is pending.
-        # Return chart-ready analytics output so the UI can render full results.
-        results_data = _load_sample_dataset("turbojet")
-        results_data = _apply_dataset_variation(
-            results_data,
-            **_variation_from_custom_components(request.components),
-        )
-        results_data["source"] = "custom_builder_template"
-        results_data["custom_builder"] = {
-            "engine_name": request.engine_name,
-            "run_mode": request.run_mode,
-            "component_count": len(request.components),
-            "component_sequence": [component.type for component in request.components],
-            "component_names": [component.name for component in request.components],
-        }
-        
-        return SimulationResults(
-            engine_name=request.engine_name,
-            run_mode=request.run_mode,
-            status="success",
-            data=results_data,
-        )
-    
-    except Exception as e:
-        return SimulationResults(
-            engine_name=request.engine_name,
-            run_mode=request.run_mode,
-            status="error",
-            error=str(e),
-        )
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Custom engine execution is not wired to the live solver yet. "
+            "No synthetic output is returned."
+        ),
+    )
 
 @app.get("/api/engines/custom/components")
 async def get_available_components():
