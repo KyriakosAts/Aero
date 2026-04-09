@@ -5,7 +5,8 @@ import './index.css'
 
 function App() {
   const [selectedEngine, setSelectedEngine] = useState('turbojet')
-  const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true'
+  const hasExternalApi = Boolean(import.meta.env.VITE_API_BASE_URL)
+  const isDemoMode = !hasExternalApi && import.meta.env.VITE_USE_DEMO_API === 'true'
 
   return (
     <div className="min-h-screen p-4 md:p-6">
@@ -28,7 +29,7 @@ function App() {
       {isDemoMode && (
         <div className="max-w-6xl mx-auto mb-6">
           <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-            Netlify demo deployment: the UI runs against representative sample data so you can share it without shipping the full Python and Cantera solver. Local and Docker setups still use the live backend.
+            Demo fallback is active because no external backend URL is configured for this deployment. Set VITE_API_BASE_URL in Netlify to point at a real backend service if you want the live solver.
           </div>
         </div>
       )}
@@ -42,7 +43,7 @@ function App() {
 
       {/* Footer */}
       <div className="max-w-6xl mx-auto mt-10 pt-8 border-t border-slate-700/80 text-center text-slate-400 text-sm">
-        <p>{isDemoMode ? 'GSPy Web Engine v1.0.0 • React + Netlify Functions demo' : 'GSPy Web Engine v1.0.0 • React + FastAPI'}</p>
+        <p>{isDemoMode ? 'GSPy Web Engine v1.0.0 • React + Netlify Functions demo fallback' : 'GSPy Web Engine v1.0.0 • React + FastAPI'}</p>
       </div>
     </div>
   )

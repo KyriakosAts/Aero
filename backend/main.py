@@ -5,6 +5,8 @@ FastAPI wrapper around GSPy gas turbine simulation engine
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any
 import math
@@ -41,6 +43,10 @@ app = FastAPI(
     description="Gas Turbine Performance Simulation API",
     version="1.0.0",
 )
+
+frontend_dist_dir = workspace_root / "frontend" / "dist"
+frontend_assets_dir = frontend_dist_dir / "assets"
+frontend_index_file = frontend_dist_dir / "index.html"
 
 # Enable CORS
 app.add_middleware(
@@ -695,10 +701,20 @@ async def get_available_components():
     ]
     return {"available_components": components}
 
+if frontend_assets_dir.exists():
+    app.mount("/assets", StaticFiles(directory=frontend_assets_dir), name="frontend-assets")
+
+if frontend_index_file.exists():
+    @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+    async def serve_frontend_index():
+        return FileResponse(frontend_index_file)
+
 # ============================================================================
 # Run the app
 # ============================================================================
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)

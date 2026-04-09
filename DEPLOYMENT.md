@@ -7,11 +7,65 @@ This repository is now configured for a Netlify-hosted demo deployment.
 - Build config lives in `netlify.toml`
 - Netlify serves the Vite frontend from `frontend/dist`
 - `/api/*` is routed to Netlify Functions under `frontend/netlify/functions`
-- The Netlify deployment uses representative demo data instead of the live Python + Cantera solver
+- The Netlify deployment can either use a real external backend or fall back to representative demo data
 
 ### **Why demo data on Netlify?**
 
 The live backend depends on heavyweight scientific Python packages such as Cantera, NumPy, SciPy, and Matplotlib. That stack is a poor fit for standard Netlify Functions, so the Netlify deployment keeps the UI intact and serves realistic demo responses instead.
+
+Netlify also does not run arbitrary user Docker containers for your app runtime, so a true full-container deployment cannot be hosted there.
+
+### **Fully Functional Netlify Setup**
+
+If you want Netlify to use the real backend instead of the fallback demo layer:
+
+1. Deploy the backend container to a real container host.
+2. In Netlify, set `VITE_API_BASE_URL` to that backend URL, for example `https://your-backend-host/api`.
+3. Redeploy the Netlify site.
+
+When `VITE_API_BASE_URL` is set, the frontend will call that backend directly and will not use the fallback demo functions.
+
+## **🐳 Full Container Deployment**
+
+If you want the real application online with the live backend, use the full-container path on a container host such as Render, Railway, Fly.io, Azure Container Apps, or a VPS.
+
+### **Single Container**
+
+The repository now includes a root `Dockerfile` that:
+
+- builds the Vite frontend
+- copies the backend, `src`, and `projects` into the runtime image
+- serves the built frontend from FastAPI on the same port as the API
+
+Build and run it locally:
+
+```bash
+docker build -t aero-fullstack .
+docker run --rm -p 8000:8000 aero-fullstack
+```
+
+Then open:
+
+- App: `http://localhost:8000`
+- API docs: `http://localhost:8000/docs`
+
+### **Two-Container Local Dev**
+
+The existing `docker-compose.yml` has been corrected to build from the repository root so the backend can actually see the `backend`, `src`, and `projects` folders it depends on.
+
+Run it with:
+
+```bash
+docker compose up --build
+```
+
+### **Single-Container Compose**
+
+For a single-container compose flow, use:
+
+```bash
+docker compose -f docker-compose.fullstack.yml up --build
+```
 
 ### **Deploy Steps**
 

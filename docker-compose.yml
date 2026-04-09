@@ -1,33 +1,31 @@
-# Docker Compose configuration for GSPy Web UI
-# Run with: docker-compose up
-
-version: '3.8'
-
 services:
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
     environment:
       - PYTHONUNBUFFERED=1
+      - PORT=8000
     volumes:
+      - ./backend:/app/backend
       - ./src:/app/src
       - ./projects:/app/projects
-    command: python main.py
+    command: python backend/main.py
 
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
     ports:
       - "5173:5173"
     depends_on:
       - backend
     environment:
-      - VITE_API_URL=http://backend:8000/api
+      - VITE_API_BASE_URL=http://backend:8000/api
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev -- --host 0.0.0.0
 
-volumes:
-  backend_data:
-  frontend_data:

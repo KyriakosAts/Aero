@@ -6,7 +6,7 @@
 
 [build.environment]
   NODE_VERSION = "20"
-  VITE_DEMO_MODE = "true"
+  VITE_USE_DEMO_API = "true"
 
 [[redirects]]
   from = "/api/*"
