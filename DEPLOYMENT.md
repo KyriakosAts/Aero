@@ -1,5 +1,7 @@
 # 🚀 GSPy Web UI - Deployment & Usage Guide
 
+For a full Oracle Cloud VM deployment path, see `ORACLE_DEPLOYMENT.md`.
+
 ## **🌐 Netlify Deployment**
 
 This repository is now configured for a Netlify-hosted demo deployment.
