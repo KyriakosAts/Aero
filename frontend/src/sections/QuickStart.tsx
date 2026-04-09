@@ -225,7 +225,11 @@ export function QuickStart({ selectedEngine, onEngineChange }: QuickStartProps) 
         <Card
           title="Analysis Mode"
           description="OD is used automatically for turbojet analysis. DP warm-up is handled internally by the model."
-        />
+        >
+          <p className="text-sm text-slate-300">
+            Turbojet presets use the off-design sweep so the dashboard can show the operating curve across the throttle range.
+          </p>
+        </Card>
       )}
 
       {/* Run Button */}

@@ -1,5 +1,42 @@
 # 🚀 GSPy Web UI - Deployment & Usage Guide
 
+## **🌐 Netlify Deployment**
+
+This repository is now configured for a Netlify-hosted demo deployment.
+
+- Build config lives in `netlify.toml`
+- Netlify serves the Vite frontend from `frontend/dist`
+- `/api/*` is routed to Netlify Functions under `frontend/netlify/functions`
+- The Netlify deployment uses representative demo data instead of the live Python + Cantera solver
+
+### **Why demo data on Netlify?**
+
+The live backend depends on heavyweight scientific Python packages such as Cantera, NumPy, SciPy, and Matplotlib. That stack is a poor fit for standard Netlify Functions, so the Netlify deployment keeps the UI intact and serves realistic demo responses instead.
+
+### **Deploy Steps**
+
+1. Push this repository to GitHub.
+2. In Netlify, create a new site from the repo.
+3. Netlify should pick up `netlify.toml` automatically.
+4. If Netlify asks for values manually, use:
+   - Base directory: `frontend`
+   - Build command: `npm install && npm run build`
+   - Publish directory: `dist`
+5. Deploy the site.
+
+### **What works on Netlify**
+
+- Preset engine flows in the current UI
+- Parameter-sensitive demo responses for the preset engines
+- The Custom Builder UI with a structural demo estimator
+- Same `/api` routes the frontend already expects
+
+### **What still requires local or Docker deployment**
+
+- Live FastAPI execution
+- Real GSPy and Cantera simulations
+- Full scientific backend behavior
+
 ## **How to Run**
 
 ### **⚡ Quickest Way (One Command)**
@@ -153,7 +190,7 @@ docker-compose down
 
 ### **Full GSPy Functionality**
 
-To use actual simulations (not mock endpoints):
+To use actual simulations instead of the Netlify demo layer:
 
 ```bash
 # Install GSPy in dev mode
@@ -195,7 +232,7 @@ Edit `frontend/src/App.tsx` and add new tab:
 ### **Change API Base URL**
 Edit `frontend/src/api/client.ts`:
 ```typescript
-const API_BASE = process.env.VITE_API_URL || '/api'
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
 ```
 
 ---
@@ -208,7 +245,7 @@ const API_BASE = process.env.VITE_API_URL || '/api'
 
 2. **Production**
    - Build frontend: `npm run build`
-   - Use Gunicorn for backend: `gunicorn backend.main:app`
+   - For live simulations, use Gunicorn for backend: `gunicorn backend.main:app`
    - Serve frontend from CDN
    - Use environment variables for configuration
 
@@ -247,7 +284,7 @@ DEBUG=False
 
 **`frontend/.env`**
 ```
-VITE_API_URL=http://localhost:8000/api
+VITE_API_BASE_URL=http://localhost:8000/api
 ```
 
 ---
