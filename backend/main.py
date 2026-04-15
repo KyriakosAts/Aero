@@ -48,10 +48,15 @@ frontend_dist_dir = workspace_root / "frontend" / "dist"
 frontend_assets_dir = frontend_dist_dir / "assets"
 frontend_index_file = frontend_dist_dir / "index.html"
 
-# Enable CORS
+# Enable CORS – configurable via CORS_ORIGINS env var (comma-separated).
+# When unset, defaults to ["*"] for local development.
+_cors_env = os.environ.get("CORS_ORIGINS", "")
+_allowed_origins = (
+    [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else ["*"]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Change this to specific domains in production
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
