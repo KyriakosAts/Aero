@@ -217,45 +217,26 @@ def _build_dataset_from_table_rows(
     normalized_mode = preferred_mode.upper()
 
     if normalized_mode == "OD" and od_rows:
-        summary_row = od_rows[-1]
+        # Use the DP row for the summary – it represents the engine's rated
+        # design-point performance, which is the most meaningful single-point
+        # reference.  The full OD sweep is still available in performance_curve
+        # and table_rows.
+        summary_row = dp_row
         series_rows = od_rows
 
-        def _avg(values: List[float]) -> Optional[float]:
-            return (sum(values) / len(values)) if values else None
-
-        thrust_values = [_kn_to_n(row.get("FN")) for row in od_rows]
-        thrust_values = [value for value in thrust_values if value is not None]
-
-        fuel_values = [
-            _to_float(row.get("WF")) or _to_float(row.get("Wf_combustor1"))
-            for row in od_rows
-        ]
-        fuel_values = [value for value in fuel_values if value is not None]
-
-        compressor_pr_values = [_to_float(row.get("PR_compressor1")) for row in od_rows]
-        compressor_pr_values = [value for value in compressor_pr_values if value is not None]
-
-        t4_values = [_to_float(row.get("T4")) for row in od_rows]
-        t4_values = [value for value in t4_values if value is not None]
-
-        n1_values = [_to_float(row.get("N1%")) for row in od_rows]
-        n1_values = [value for value in n1_values if value is not None]
-
-        tsfc_values: List[float] = []
-        for row in od_rows:
-            fuel = _to_float(row.get("WF")) or _to_float(row.get("Wf_combustor1"))
-            thrust = _kn_to_n(row.get("FN"))
-            if fuel is None or thrust in (None, 0.0):
-                continue
-            tsfc_values.append(fuel / thrust)
+        fuel_flow = _to_float(summary_row.get("WF")) or _to_float(summary_row.get("Wf_combustor1"))
+        net_thrust = _kn_to_n(summary_row.get("FN"))
+        tsfc = None
+        if fuel_flow is not None and net_thrust not in (None, 0.0):
+            tsfc = fuel_flow / net_thrust
 
         summary = {
-            "net_thrust_N": _avg(thrust_values),
-            "fuel_flow_kg_s": _avg(fuel_values),
-            "tsfc_kg_per_Ns": _avg(tsfc_values),
-            "compressor_pr": _avg(compressor_pr_values),
-            "turbine_inlet_temp_K": _avg(t4_values),
-            "n1_percent": _avg(n1_values),
+            "net_thrust_N": net_thrust,
+            "fuel_flow_kg_s": fuel_flow,
+            "tsfc_kg_per_Ns": tsfc,
+            "compressor_pr": _to_float(summary_row.get("PR_compressor1")),
+            "turbine_inlet_temp_K": _to_float(summary_row.get("T4")),
+            "n1_percent": _to_float(summary_row.get("N1%")),
         }
     else:
         summary_row = dp_row

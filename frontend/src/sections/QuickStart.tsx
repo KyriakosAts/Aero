@@ -224,10 +224,10 @@ export function QuickStart({ selectedEngine, onEngineChange }: QuickStartProps) 
       {selectedEngine !== 'custom_builder' && selectedEngine.startsWith('turbojet') && (
         <Card
           title="Analysis Mode"
-          description="OD is used automatically for turbojet analysis. DP warm-up is handled internally by the model."
+          description="The simulation first runs the Design Point (DP) to establish rated performance, then performs an Off-Design (OD) throttle sweep."
         >
           <p className="text-sm text-slate-300">
-            Turbojet presets use the off-design sweep so the dashboard can show the operating curve across the throttle range.
+            The summary cards show the engine's design-point performance at your chosen flight conditions. The charts and table below show how performance varies across the throttle range (OD sweep).
           </p>
         </Card>
       )}
